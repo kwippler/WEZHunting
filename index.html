@@ -52,17 +52,17 @@
 
                 <div class="mb-3">
                     <label class="block text-sm font-medium text-gray-700 mb-1" id="bcLabel" title="Ballistic Coefficient, referenced to the drag model selected above">G7 BC</label>
-                    <input type="number" id="bc" value="0.250" step="0.001" class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
+                    <input type="number" id="bc" value="0.191" step="0.001" class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
                 </div>
                 
                 <div class="mb-3">
                     <label class="block text-sm font-medium text-gray-700 mb-1" title="Bullet mass">Bullet Weight (grains)</label>
-                    <input type="number" id="bulletWeight" value="175" step="1" class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
+                    <input type="number" id="bulletWeight" value="77" step="1" class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
                 </div>
 
                 <div class="mb-3">
                     <label class="block text-sm font-medium text-gray-700 mb-1" title="Average velocity">Muzzle Velocity (m/s)</label>
-                    <input type="number" id="mv" value="792" step="1" class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
+                    <input type="number" id="mv" value="830" step="1" class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
                 </div>
 
                 <div class="mb-3">
@@ -153,6 +153,20 @@
                 </div>
 
                 <div class="mb-3">
+                    <label class="block text-sm font-medium text-gray-700 mb-1" title="Angular value of one turret click, used to convert the vertical (elevation) correction into scope clicks on the range card.">Scope Click Value (mrad/click)</label>
+                    <select id="clickValuePreset" class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
+                        <option value="0.1" selected>0.1 mrad / click</option>
+                        <option value="0.2">0.2 mrad / click</option>
+                        <option value="0.28">0.28 mrad / click (&asymp; 1/10 MOA)</option>
+                        <option value="0.35">0.35 mrad / click (&asymp; 1/8 MOA)</option>
+                        <option value="0.70">0.70 mrad / click (&asymp; 1/4 MOA)</option>
+                        <option value="custom">Custom</option>
+                    </select>
+                    <input type="number" id="clickValueCustom" value="0.1" step="0.01" min="0.01" class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border mt-2" disabled>
+                    <p class="text-xs text-gray-500 mt-1" id="clickValueNote">0.1 mrad / click &mdash; fine precision turret.</p>
+                </div>
+
+                <div class="mb-3">
                     <label class="block text-sm font-medium text-gray-700 mb-1" title="Target Distance (max 800m)">Target Range (meters)</label>
                     <input type="number" id="range" value="600" step="10" max="800" class="w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-2 border">
                 </div>
@@ -240,6 +254,28 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Range Card: 0-300 m, 25 m increments -->
+            <div class="bg-white p-4 rounded-xl shadow-md border border-gray-200">
+                <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-3 gap-1">
+                    <h3 class="text-sm font-bold text-gray-700">Range Card (0&ndash;300 m)</h3>
+                    <p class="text-xs text-gray-500">Vertical-only elevation clicks to stay on target &bull; velocity &amp; kinetic energy per range</p>
+                </div>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-sm border-collapse">
+                        <thead>
+                            <tr class="text-gray-500 uppercase text-xs tracking-wider border-b border-gray-200">
+                                <th class="text-left py-2 px-3 font-semibold">Range (m)</th>
+                                <th class="text-right py-2 px-3 font-semibold">v (m/s)</th>
+                                <th class="text-right py-2 px-3 font-semibold">E (J)</th>
+                                <th class="text-right py-2 px-3 font-semibold" title="Scope clicks of elevation (up/dial-up, down/dial-down) to keep the point of impact on target at this range, relative to the zero position.">Clicks (vert.)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="rangeCardBody"></tbody>
+                    </table>
+                </div>
+                <p class="text-xs text-gray-400 mt-2">Clicks are elevation-only, measured from the zero position at the chosen zero range. Velocity and energy are baseline (no-wind, average muzzle velocity) values.</p>
+            </div>
         </div>
     </main>
 
@@ -247,6 +283,7 @@
         // Constants & Conversions
         const GRAVITY = 9.80665;
         const PI = Math.PI;
+        const GRAIN_TO_KG = 6.479891e-5; // 1 grain = 64.79891 mg
 
         // Reference density the G1-G8 drag tables (incl. G7) were calibrated
         // against: the historical "Army Standard Metro" atmosphere
@@ -391,6 +428,37 @@
         }
         targetPresetSelect.addEventListener('change', applyTargetPreset);
         applyTargetPreset();
+
+        // Scope click-value observer: convert the vertical (elevation)
+        // correction into scope turret clicks for the range card.
+        const clickValueSelect = document.getElementById('clickValuePreset');
+        const clickValueCustom = document.getElementById('clickValueCustom');
+        const clickValueNote = document.getElementById('clickValueNote');
+
+        const CLICK_VALUE_PRESETS = {
+            '0.1':  { value: 0.1,  note: '0.1 mrad / click &mdash; fine precision turret.' },
+            '0.2':  { value: 0.2,  note: '0.2 mrad / click.' },
+            '0.28': { value: 0.28, note: '&asymp; 1/10 MOA / click &mdash; common on modern long-range scopes.' },
+            '0.35': { value: 0.35, note: '&asymp; 1/8 MOA / click.' },
+            '0.70': { value: 0.70, note: '&asymp; 1/4 MOA / click &mdash; standard hunting scope.' },
+            custom: { value: null, note: 'Enter your scope\u2019s click value in mrad below (e.g. 1.00 for a 1 mrad click).' }
+        };
+
+        function getClickValueMrad() {
+            if (clickValueSelect.value === 'custom') {
+                const c = parseFloat(clickValueCustom.value);
+                return (c > 0) ? c : 0.1;
+            }
+            return (CLICK_VALUE_PRESETS[clickValueSelect.value] || { value: 0.1 }).value;
+        }
+
+        function applyClickValuePreset() {
+            const p = CLICK_VALUE_PRESETS[clickValueSelect.value] || CLICK_VALUE_PRESETS['0.1'];
+            clickValueNote.innerHTML = p.note;
+            clickValueCustom.disabled = (clickValueSelect.value !== 'custom');
+        }
+        clickValueSelect.addEventListener('change', applyClickValuePreset);
+        applyClickValuePreset();
 
         // Wind gust preset observer.
         // Speed SD and direction SD are the shot-to-shot 1-sigma fluctuation
@@ -618,7 +686,7 @@
             headwindMs = 0
         ) {
             if (!(bc > 0) || !(muzzleVelocity > 0) || rangeTargetMeters <= 0) {
-                return { dropMeters: -sightHeightM, driftMeters: 0, timeOfFlight: 0 };
+                return { dropMeters: -sightHeightM, driftMeters: 0, timeOfFlight: 0, velocityMetersPerSecond: muzzleVelocity };
             }
 
             // BC already contains the projectile mass/diameter/form-factor
@@ -723,7 +791,7 @@
                 step++;
             }
 
-            return { dropMeters: y, driftMeters: z, timeOfFlight: t };
+            return { dropMeters: y, driftMeters: z, timeOfFlight: t, velocityMetersPerSecond: Math.hypot(vx, vy, vz) };
         }
 
         // Solve for the bore angle (relative to the LOS) that puts the
@@ -741,6 +809,38 @@
                 if (r.dropMeters < 0) lo = mid; else hi = mid;
             }
             return (lo + hi) / 2;
+        }
+
+        function buildRangeCard({ mvBase, bulletWeight, clickValue, evalPoint }) {
+            const body = document.getElementById('rangeCardBody');
+            if (!body) return;
+            const mKg = bulletWeight * GRAIN_TO_KG;
+            let html = '';
+            for (let r = 0; r <= 300; r += 25) {
+                let v, clicks;
+                if (r === 0) {
+                    v = mvBase;
+                    clicks = 0;
+                } else {
+                    const tp = evalPoint(r, mvBase, 0);
+                    v = tp.velocityMetersPerSecond;
+                    // Elevation angle (mrad) to bring the point of impact
+                    // back onto the LOS/aim point at this range, divided by
+                    // the click value -> turret clicks. Positive = dial up.
+                    clicks = ((-tp.dropMeters / r) * 1000) / clickValue;
+                }
+                const energy = 0.5 * mKg * v * v; // Joules
+                const up = clicks >= 0;
+                const clickText = (up ? '+' : '\u2212') + Math.abs(clicks).toFixed(1);
+                html +=
+                    '<tr class="border-b border-gray-100 hover:bg-gray-50">' +
+                    '<td class="py-1.5 px-3 text-gray-700 font-medium">' + r + '</td>' +
+                    '<td class="py-1.5 px-3 text-right text-gray-700 tabular-nums">' + v.toFixed(0) + '</td>' +
+                    '<td class="py-1.5 px-3 text-right text-gray-700 tabular-nums">' + energy.toFixed(0) + '</td>' +
+                    '<td class="py-1.5 px-3 text-right font-medium tabular-nums ' + (up ? 'text-blue-600' : 'text-amber-600') + '">' + clickText + '</td>' +
+                    '</tr>';
+            }
+            body.innerHTML = html;
         }
 
         function runSimulation() {
@@ -815,6 +915,8 @@
             const mradCorrection = (-zeroDrop / targetRange) * 1000;
             mradDisplay.textContent = mradCorrection.toFixed(2) + ' mrad';
             dropDisplay.textContent = `Drop relative to ${zeroRange.toFixed(0)} m zero: ${(zeroDrop * 100).toFixed(1)} cm`;
+
+            buildRangeCard({ mvBase, bulletWeight, clickValue: getClickValueMrad(), evalPoint: zeroedTrajectoryPoint });
 
             // Monte Carlo Loop
             let hits = 0;
